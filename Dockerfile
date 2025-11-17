@@ -20,6 +20,10 @@ RUN rm -rf ./lua-cs-bouncer/
 COPY ./openresty /tmp
 RUN SSL_CERTS_PATH=/etc/ssl/certs/ca-certificates.crt envsubst '$SSL_CERTS_PATH' < /tmp/crowdsec_openresty.conf > /etc/nginx/conf.d/crowdsec_openresty.conf
 RUN sed -i '1 i\resolver local=on ipv6=off;' /etc/nginx/conf.d/crowdsec_openresty.conf
+RUN mkdir -p /etc/nginx/stream.d \
+    && if ! grep -q "include /etc/nginx/stream.d/" /usr/local/openresty/nginx/conf/nginx.conf; then \
+        printf '\nstream {\n    include /etc/nginx/stream.d/;\n}\n' >> /usr/local/openresty/nginx/conf/nginx.conf; \
+    fi
 COPY ./docker/docker_start.sh /
 
 ENTRYPOINT ["/bin/sh", "docker_start.sh"]
