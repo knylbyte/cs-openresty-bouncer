@@ -25,8 +25,7 @@ RUN mkdir -p /etc/nginx/stream.d \
         printf '\nstream {\n    include /etc/nginx/stream.d/*.conf;\n}\n' >> /usr/local/openresty/nginx/conf/nginx.conf; \
     fi
 RUN mkdir -p /staging/etc/nginx/conf.d \
-    && cp -a /etc/nginx/conf.d/. /staging/etc/nginx/conf.d/ \
-    && rm -rf /etc/nginx/conf.d/*
+    && cp -a /etc/nginx/conf.d/. /staging/etc/nginx/conf.d/
 COPY ./docker/docker_start.sh /
 
 ENTRYPOINT ["/bin/sh", "docker_start.sh"]
