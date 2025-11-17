@@ -1,14 +1,14 @@
 ARG BUILD_ENV=git
-FROM docker.io/openresty/openresty:alpine-fat as with_deps
+FROM docker.io/openresty/openresty:alpine-fat AS with_deps
 RUN luarocks install lua-resty-http 0.17.1-0
 
-FROM with_deps as git
+FROM with_deps AS git
 ARG BUILD_ENV=git
 ARG LUA_LIB_VERSION=v1.0.11
 RUN if [ "$BUILD_ENV" == "git" ]; then apk add --no-cache git; fi
 RUN if [ "$BUILD_ENV" == "git" ]; then git clone -b "${LUA_LIB_VERSION}" https://github.com/crowdsecurity/lua-cs-bouncer.git ; fi
 
-FROM with_deps as local
+FROM with_deps AS local
 RUN if [ "$BUILD_ENV" == "local" ]; then COPY ./lua-cs-bouncer/ lua-cs-bouncer; fi
 
 FROM ${BUILD_ENV}
@@ -21,8 +21,8 @@ COPY ./openresty /tmp
 RUN SSL_CERTS_PATH=/etc/ssl/certs/ca-certificates.crt envsubst '$SSL_CERTS_PATH' < /tmp/crowdsec_openresty.conf > /etc/nginx/conf.d/crowdsec_openresty.conf
 RUN sed -i '1 i\resolver local=on ipv6=off;' /etc/nginx/conf.d/crowdsec_openresty.conf
 RUN mkdir -p /etc/nginx/stream.d \
-    && if ! grep -q "include /etc/nginx/stream.d/" /usr/local/openresty/nginx/conf/nginx.conf; then \
-        printf '\nstream {\n    include /etc/nginx/stream.d/;\n}\n' >> /usr/local/openresty/nginx/conf/nginx.conf; \
+    && if ! grep -q "include /etc/nginx/stream.d/\*.conf" /usr/local/openresty/nginx/conf/nginx.conf; then \
+        printf '\nstream {\n    include /etc/nginx/stream.d/*.conf;\n}\n' >> /usr/local/openresty/nginx/conf/nginx.conf; \
     fi
 COPY ./docker/docker_start.sh /
 
