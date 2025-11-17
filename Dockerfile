@@ -18,14 +18,13 @@ RUN cp -R lua-cs-bouncer/templates/* /var/lib/crowdsec/lua/templates/
 RUN cp lua-cs-bouncer/config_example.conf /etc/crowdsec/bouncers/crowdsec-openresty-bouncer.conf
 RUN rm -rf ./lua-cs-bouncer/
 COPY ./openresty /tmp
-RUN SSL_CERTS_PATH=/etc/ssl/certs/ca-certificates.crt envsubst '$SSL_CERTS_PATH' < /tmp/crowdsec_openresty.conf > /etc/nginx/conf.d/crowdsec_openresty.conf
-RUN sed -i '1 i\resolver local=on ipv6=off;' /etc/nginx/conf.d/crowdsec_openresty.conf
-RUN mkdir -p /etc/nginx/stream.d \
-    && if ! grep -q "include /etc/nginx/stream.d/\*.conf" /usr/local/openresty/nginx/conf/nginx.conf; then \
+RUN mkdir -p /etc/nginx/stream.d /etc/nginx/conf-crowdsec.d /staging/etc/nginx/conf-crowdsec.d
+RUN SSL_CERTS_PATH=/etc/ssl/certs/ca-certificates.crt envsubst '$SSL_CERTS_PATH' < /tmp/crowdsec_openresty.conf > /etc/nginx/conf-crowdsec.d/crowdsec_openresty.conf
+RUN sed -i '1 i\resolver local=on ipv6=off;' /etc/nginx/conf-crowdsec.d/crowdsec_openresty.conf
+RUN if ! grep -q "include /etc/nginx/stream.d/\*.conf" /usr/local/openresty/nginx/conf/nginx.conf; then \
         printf '\nstream {\n    include /etc/nginx/stream.d/*.conf;\n}\n' >> /usr/local/openresty/nginx/conf/nginx.conf; \
     fi
-RUN mkdir -p /staging/etc/nginx/conf.d \
-    && cp -a /etc/nginx/conf.d/. /staging/etc/nginx/conf.d/
+RUN sed -i 's#^\([[:space:]]*include[[:space:]]\)/etc/nginx/conf\.d/\*\.conf;#\1/etc/nginx/conf-openresty.d/*.conf;\n\1/etc/nginx/conf.d/*.conf;#' /usr/local/openresty/nginx/conf/nginx.conf
 COPY ./docker/docker_start.sh /
 
 ENTRYPOINT ["/bin/sh", "docker_start.sh"]
