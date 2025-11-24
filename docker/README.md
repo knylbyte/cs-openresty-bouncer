@@ -86,7 +86,11 @@ For others parameters, you can use environment variables below or mount your own
 
 * `/usr/local/openresty/lualib/plugins/crowdsec` - Crowdsec lua library path
   
-* `/etc/nginx/conf.d` - Nginx configuration to load the crowdsec bouncer lua library and configuration.
+* `/etc/nginx/crowdsec-conf.d` - Nginx configuration to load the crowdsec bouncer lua library and configuration.
+
+* `/etc/nginx/conf.d` - Nginx configuration to load your custom server block (vhost) configration.
+
+* `/etc/nginx/stream.d` - Nginx configuration to load your custom tcp/udp stream configuration.
 
 ## Find Us
 
