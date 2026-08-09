@@ -21,7 +21,7 @@ jobs:
     permissions:
       contents: read # checkout
     env:
-      DOCKER_IMAGE: crowdsecurity/openresty
+      DOCKER_IMAGE: ${{ vars.DOCKER_IMAGE || 'crowdsecurity/openresty' }}   
     steps:
       - name: Check out the repo
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -35,6 +35,7 @@ jobs:
           IS_LATEST: ${{ github.event_name == 'release' && github.event.action == 'released' }}
         run: |
           set -euo pipefail
+          : "${DOCKER_IMAGE:?Set the GitHub environment variable DOCKER_IMAGE, for example crowdsecurity/openresty}"
           if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
             echo "Invalid version '$VERSION'; expected vMAJOR.MINOR.PATCH[-PRERELEASE]" >&2
             exit 1
