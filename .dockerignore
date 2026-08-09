@@ -1,0 +1,9 @@
+**
+!Dockerfile
+!docker/
+!docker/docker_start.sh
+!openresty/
+!openresty/crowdsec_openresty.conf
+!lua-cs-bouncer/
+!lua-cs-bouncer/**
+lua-cs-bouncer/.git/

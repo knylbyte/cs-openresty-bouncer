@@ -1,0 +1,88 @@
+name: Test Docker image
+
+on:
+  pull_request:
+    paths:
+      - ".dockerignore"
+      - "Dockerfile"
+      - "docker/**"
+      - "openresty/**"
+      - ".github/workflows/test-docker.yaml"
+  push:
+    branches:
+      - main
+    paths:
+      - ".dockerignore"
+      - "Dockerfile"
+      - "docker/**"
+      - "openresty/**"
+      - ".github/workflows/test-docker.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build test image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: cs-openresty-bouncer:test
+          cache-from: type=gha,scope=openresty-test
+          cache-to: type=gha,mode=max,scope=openresty-test
+
+      - name: Validate OpenResty configuration
+        run: |
+          docker run --rm \
+            --read-only \
+            --tmpfs /var/run:rw,noexec,nosuid,size=16m \
+            --env ENABLED=false \
+            --env SERVER_TOKENS=off \
+            --env WORKER_CONNECTIONS=2048 \
+            cs-openresty-bouncer:test openresty -t
+
+      - name: Smoke test HTTP server
+        run: |
+          set -euo pipefail
+          container_id=$(docker run --rm --detach \
+            --read-only \
+            --tmpfs /var/run:rw,noexec,nosuid,size=16m \
+            --env ENABLED=false \
+            --publish 127.0.0.1:8080:80 \
+            cs-openresty-bouncer:test)
+
+          trap 'docker stop --time 5 "$container_id" >/dev/null 2>&1 || true' EXIT
+
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error http://127.0.0.1:8080/ >/dev/null; then
+              container_logs=$(docker logs "$container_id" 2>&1)
+              if grep -q "init_worker_by_lua error" <<<"$container_logs"; then
+                printf '%s\n' "$container_logs"
+                exit 1
+              fi
+              exit 0
+            fi
+            echo "HTTP smoke test attempt ${attempt}/20 failed; retrying"
+            sleep 0.5
+          done
+
+          docker logs "$container_id"
+          exit 1
