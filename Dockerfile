@@ -89,12 +89,22 @@ RUN set -eux; \
     sed -i \
       's|^[[:space:]]*#pid[[:space:]]\+logs/nginx\.pid;|pid /var/run/openresty/nginx.pid;|' \
       /usr/local/openresty/nginx/conf/nginx.conf; \
+    grep -qE '^[[:space:]]*worker_connections[[:space:]]+[0-9]+;' /usr/local/openresty/nginx/conf/nginx.conf; \
+    sed -i \
+      's#^\([[:space:]]*\)worker_connections[[:space:]][[:space:]]*[0-9][0-9]*;#\1include /var/run/openresty/events.conf;#' \
+      /usr/local/openresty/nginx/conf/nginx.conf; \
+    grep -qE '^[[:space:]]*http[[:space:]]*\{' /usr/local/openresty/nginx/conf/nginx.conf; \
+    sed -i \
+      '/^[[:space:]]*http[[:space:]]*{/a\    include /var/run/openresty/http.conf;' \
+      /usr/local/openresty/nginx/conf/nginx.conf; \
+    test "$(grep -cF 'include /var/run/openresty/events.conf;' /usr/local/openresty/nginx/conf/nginx.conf)" -eq 1; \
+    test "$(grep -cF 'include /var/run/openresty/http.conf;' /usr/local/openresty/nginx/conf/nginx.conf)" -eq 1; \
     grep -qF 'include /etc/nginx/conf.d/*.conf;' /usr/local/openresty/nginx/conf/nginx.conf; \
     sed -i \
       's#^\([[:space:]]*include[[:space:]]\+\)/etc/nginx/conf\.d/\*\.conf;#\1/etc/nginx/bouncer.d/*.conf;\n\1/etc/nginx/conf.d/*.conf;#' \
       /usr/local/openresty/nginx/conf/nginx.conf; \
     test "$(grep -cF 'include /etc/nginx/bouncer.d/*.conf;' /usr/local/openresty/nginx/conf/nginx.conf)" -eq 1; \
-    mkdir -p /var/run/crowdsec
+    mkdir -p /var/run/crowdsec /var/run/openresty
 
 COPY --chmod=0755 docker/docker_start.sh /usr/local/bin/docker-entrypoint.sh
 

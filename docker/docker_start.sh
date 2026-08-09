@@ -3,8 +3,9 @@ set -eu
 
 DEFAULT_BOUNCER_CONFIG="/etc/crowdsec/bouncers/crowdsec-openresty-bouncer.conf"
 RUNTIME_BOUNCER_CONFIG="/var/run/crowdsec/crowdsec-openresty-bouncer.conf"
-NGINX_CONF_TEMPLATE="/usr/local/openresty/nginx/conf/nginx.conf"
-NGINX_CONF="${NGINX_CONF:-/var/run/openresty/nginx.conf}"
+RUNTIME_NGINX_DIR="/var/run/openresty"
+RUNTIME_NGINX_EVENTS_CONFIG="${RUNTIME_NGINX_DIR}/events.conf"
+RUNTIME_NGINX_HTTP_CONFIG="${RUNTIME_NGINX_DIR}/http.conf"
 
 log() {
     printf '[docker-entrypoint] %s\n' "$*"
@@ -129,10 +130,7 @@ USE_TLS_AUTH
     done
 }
 
-prepare_nginx_config() {
-    mkdir -p "$(dirname "$NGINX_CONF")"
-    cp "$NGINX_CONF_TEMPLATE" "$NGINX_CONF"
-
+prepare_nginx_runtime_config() {
     : "${SERVER_TOKENS:=on}"
     : "${WORKER_CONNECTIONS:=1024}"
 
@@ -142,44 +140,27 @@ prepare_nginx_config() {
             ;;
         *)
             log "Setting worker_connections to $WORKER_CONNECTIONS"
-            if grep -qE '^[[:space:]]*worker_connections[[:space:]]+' "$NGINX_CONF"; then
-                sed -i "s|^[[:space:]]*worker_connections[[:space:]]\+.*;|    worker_connections ${WORKER_CONNECTIONS};|" "$NGINX_CONF"
-            elif grep -qE '^[[:space:]]*#[[:space:]]*worker_connections[[:space:]]+' "$NGINX_CONF"; then
-                sed -i "s|^[[:space:]]*#[[:space:]]*worker_connections[[:space:]]\+.*;|    worker_connections ${WORKER_CONNECTIONS};|" "$NGINX_CONF"
-            else
-                sed -i "/^[[:space:]]*events[[:space:]]*{/a\\    worker_connections ${WORKER_CONNECTIONS};" "$NGINX_CONF"
-            fi
             ;;
     esac
 
     case "$(printf '%s' "$SERVER_TOKENS" | tr '[:upper:]' '[:lower:]')" in
         off|false|0|no)
             log "Disabling server_tokens"
-            if grep -qE '^[[:space:]]*server_tokens[[:space:]]+' "$NGINX_CONF"; then
-                sed -i 's|^[[:space:]]*server_tokens[[:space:]]\+.*;|    server_tokens off;|' "$NGINX_CONF"
-            elif grep -qE '^[[:space:]]*#[[:space:]]*server_tokens[[:space:]]+' "$NGINX_CONF"; then
-                sed -i 's|^[[:space:]]*#[[:space:]]*server_tokens[[:space:]]\+.*;|    server_tokens off;|' "$NGINX_CONF"
-            else
-                sed -i '/^[[:space:]]*http[[:space:]]*{/a\    server_tokens off;' "$NGINX_CONF"
-            fi
+            server_tokens=off
             ;;
         on|true|1|yes)
             log "Leaving server_tokens enabled"
-            sed -i 's|^[[:space:]]*server_tokens[[:space:]]\+\(.*;\)|    # server_tokens \1|' "$NGINX_CONF"
+            server_tokens=on
             ;;
         *)
             fail "Invalid SERVER_TOKENS=$SERVER_TOKENS. Use on/off."
             ;;
     esac
-}
 
-has_nginx_config_argument() {
-    for arg in "$@"; do
-        case "$arg" in
-            -c|-c*) return 0 ;;
-        esac
-    done
-    return 1
+    mkdir -p "$RUNTIME_NGINX_DIR"
+    printf 'worker_connections %s;\n' "$WORKER_CONNECTIONS" > "$RUNTIME_NGINX_EVENTS_CONFIG"
+    printf 'server_tokens %s;\n' "$server_tokens" > "$RUNTIME_NGINX_HTTP_CONFIG"
+    chmod 0644 "$RUNTIME_NGINX_EVENTS_CONFIG" "$RUNTIME_NGINX_HTTP_CONFIG"
 }
 
 if [ "$#" -eq 0 ]; then
@@ -191,10 +172,7 @@ fi
 case "$1" in
     openresty|nginx|/usr/local/openresty/bin/openresty|/usr/local/openresty/nginx/sbin/nginx)
         prepare_bouncer_config
-        prepare_nginx_config
-        if ! has_nginx_config_argument "$@"; then
-            set -- "$@" -c "$NGINX_CONF"
-        fi
+        prepare_nginx_runtime_config
         ;;
 esac
 

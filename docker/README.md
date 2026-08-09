@@ -36,8 +36,10 @@ docker run -d -p 8080:80 \
     --name openresty crowdsecurity/openresty
 ```
 
-The image also supports a read-only root filesystem. Mount `/var/run` as a
-temporary filesystem for the generated OpenResty and bouncer configuration:
+The image also supports a read-only root filesystem. The static OpenResty and
+virtual-host configuration remains at its standard location. Mount `/var/run`
+as a temporary filesystem for OpenResty's PID and temporary files, the small
+environment-driven runtime fragments, and the effective bouncer configuration:
 
 ```shell
 docker run -d -p 8080:80 \
@@ -139,11 +141,12 @@ For other parameters, you can use the environment variables below or mount your 
 
 * `/etc/crowdsec/` - Directory where all crowdsec configurations are located
 * `/var/run/crowdsec/` - Runtime copy of the active bouncer configuration
+* `/var/run/openresty/` - OpenResty PID, temporary files, and generated runtime fragments
 
 #### Useful File Locations
 
 * `/usr/local/openresty/lualib/plugins/crowdsec` - Crowdsec lua library path
-  
+* `/usr/local/openresty/nginx/conf/nginx.conf` - Static OpenResty main configuration
 * `/etc/nginx/bouncer.d` - Nginx configuration to load the crowdsec bouncer lua library.
 * `/etc/nginx/conf.d` - Nginx configuration to load the nginx configuration.
 

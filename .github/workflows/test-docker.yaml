@@ -57,7 +57,13 @@ jobs:
             --env ENABLED=false \
             --env SERVER_TOKENS=off \
             --env WORKER_CONNECTIONS=2048 \
-            cs-openresty-bouncer:test openresty -t
+            --entrypoint /bin/sh \
+            cs-openresty-bouncer:test -ec '
+              /usr/local/bin/docker-entrypoint.sh openresty -t
+              grep -qx "worker_connections 2048;" /var/run/openresty/events.conf
+              grep -qx "server_tokens off;" /var/run/openresty/http.conf
+              test ! -e /var/run/openresty/nginx.conf
+            '
 
       - name: Smoke test HTTP server
         run: |
