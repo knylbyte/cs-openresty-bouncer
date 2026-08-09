@@ -9,7 +9,7 @@ ARG LUA_RESTY_HTTP_VERSION=0.17.2
 ARG LUA_RESTY_HTTP_COMMIT=183310324026120ab7eaf5dd82b9be90ae63aadf
 ARG LUA_LIB_VERSION=v1.0.16
 ARG LUA_LIB_COMMIT=35455a64e11368b3df73a381b09c056a3ee77e24
-ARG BOUNCER_VERSION=v1.2.1
+ARG BOUNCER_VERSION=dev
 
 FROM docker.io/library/alpine:${ALPINE_VERSION}@${ALPINE_DIGEST} AS http
 ARG LUA_RESTY_HTTP_VERSION
@@ -69,11 +69,17 @@ COPY --chmod=0600 --from=sources \
 COPY openresty/crowdsec_openresty.conf /etc/nginx/bouncer.d/crowdsec_openresty.conf
 # hadolint ignore=SC2016
 RUN set -eux; \
+    BOUNCER_VERSION="${BOUNCER_VERSION}" awk 'BEGIN { \
+      version = ENVIRON["BOUNCER_VERSION"]; \
+      exit(version ~ /^dev$|^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$/ ? 0 : 1) \
+    }' </dev/null; \
     sed -i \
       -e '1iresolver local=on ipv6=off;' \
       -e 's#${SSL_CERTS_PATH}#/etc/ssl/certs/ca-certificates.crt#g' \
       -e 's#/etc/crowdsec/bouncers/crowdsec-openresty-bouncer.conf#/var/run/crowdsec/crowdsec-openresty-bouncer.conf#g' \
-      -e "s#crowdsec-openresty-bouncer/v[0-9][0-9.]*#crowdsec-openresty-bouncer/${BOUNCER_VERSION}#g" \
+      -e "s#crowdsec-openresty-bouncer/v[0-9][0-9A-Za-z.-]*#crowdsec-openresty-bouncer/${BOUNCER_VERSION}#g" \
+      /etc/nginx/bouncer.d/crowdsec_openresty.conf; \
+    grep -qF "crowdsec-openresty-bouncer/${BOUNCER_VERSION}\")" \
       /etc/nginx/bouncer.d/crowdsec_openresty.conf; \
     grep -qF 'include       mime.types;' /usr/local/openresty/nginx/conf/nginx.conf; \
     sed -i \

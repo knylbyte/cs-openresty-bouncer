@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish'
+        description: "Version/tag to publish (for example v1.3.0)"
         required: true
-        default: 'v1.0.0'
+        type: string
 permissions: {}
 
 jobs:
@@ -31,10 +31,14 @@ jobs:
       - name: Prepare
         id: prep
         env:
-          VERSION: ${{ github.event.release.tag_name }}
-          IS_LATEST: ${{ github.event.action == 'released' }}
+          VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.version }}
+          IS_LATEST: ${{ github.event_name == 'release' && github.event.action == 'released' }}
         run: |
           set -euo pipefail
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Invalid version '$VERSION'; expected vMAJOR.MINOR.PATCH[-PRERELEASE]" >&2
+            exit 1
+          fi
           TAGS="${DOCKER_IMAGE}:${VERSION}"
           if [[ "$IS_LATEST" == "true" ]]; then
             TAGS="${TAGS},${DOCKER_IMAGE}:latest"
