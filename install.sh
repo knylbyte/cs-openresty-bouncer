@@ -5,12 +5,11 @@ NGINX_CONF_DIR="/usr/local/openresty/nginx/conf/conf.d/"
 LIB_PATH="/usr/local/openresty/lualib/"
 CONFIG_PATH="/etc/crowdsec/bouncers/"
 DATA_PATH="/var/lib/crowdsec/lua/"
-PKG="apt"
-PACKAGE_LIST="dpkg -l"
 SSL_CERTS_PATH="/etc/ssl/certs/ca-certificates.crt"
+SSL_CERTS_PATH_CUSTOM="false"
 BOUNCER_VERSION="${BOUNCER_VERSION:-dev}"
 LAPI_DEFAULT_PORT="8080"
-SILENT="false"
+DOCKER=""
 
 #Accept cmdline arguments to overwrite options.
 while [[ $# -gt 0 ]]
@@ -30,9 +29,7 @@ do
         ;;
         --SSL_CERTS_PATH=*)
             SSL_CERTS_PATH="${1#*=}"
-        ;;
-        -y|--yes)
-            SILENT="true"
+            SSL_CERTS_PATH_CUSTOM="true"
         ;;
         --docker)
             DOCKER="1"
@@ -41,23 +38,16 @@ do
     shift
 done
 
-check_pkg_manager(){
+set_default_ssl_certs_path() {
+    if [[ "${SSL_CERTS_PATH_CUSTOM}" == "true" ]]; then
+        return
+    fi
     if [ -f /etc/redhat-release ]; then
-        PKG="yum"
-        PACKAGE_LIST="yum list installed"
         SSL_CERTS_PATH="/etc/ssl/certs/ca-bundle.crt"
     elif [ -f /etc/system-release ]; then
         if grep -q "Amazon Linux release 2 (Karoo)" < /etc/system-release ; then
-            PKG="yum"
-            PACKAGE_LIST="yum list installed"
             SSL_CERTS_PATH="/etc/ssl/certs/ca-bundle.crt"
         fi
-    elif [ -f /etc/debian_version ]; then
-        PKG="apt"
-        PACKAGE_LIST="dpkg -l"
-    else
-        echo "Distribution is not supported, exiting."
-        exit
     fi   
 }
 
@@ -99,58 +89,6 @@ gen_config_file() {
     sed -i 's|/var/lib/crowdsec/lua|'"${DATA_PATH}"'|' "${CONFIG_PATH}/crowdsec-openresty-bouncer.conf"
 }
 
-check_openresty_dependency() {
-    DEPENDENCY=( \
-        "openresty-opm" \
-        )
-    for dep in "${DEPENDENCY[@]}";
-    do
-        if ! $PACKAGE_LIST | grep "${dep}" > /dev/null; then
-            if [[ ${SILENT} == "true" ]]; then
-                "$PKG" install -y -qq "${dep}" > /dev/null && echo "${dep} successfully installed"
-            else
-                echo "${dep} not found, do you want to install it (Y/n)? "
-                read -r answer
-                if [[ ${answer} == "" ]]; then
-                    answer="y"
-                fi
-                if [ "$answer" != "${answer#[Yy]}" ] ;then
-                    "$PKG" install -y -qq "${dep}" > /dev/null && echo "${dep} successfully installed"
-                else
-                    echo "unable to continue without ${dep}. Exiting" && exit 1
-                fi
-            fi
-        fi
-    done
-}
-
-check_lua_dependency() {
-    DEPENDENCY=( \
-        "ledgetech/lua-resty-http=0.17.1" \
-    )
-    for dep in "${DEPENDENCY[@]}";
-    do
-        
-        if ! opm list | grep "${dep}" > /dev/null; then
-            if [[ ${SILENT} == "true" ]]; then
-                opm get "${dep}" > /dev/null && echo "${dep} successfully installed"
-            else
-                echo "${dep} not found, do you want to install it (Y/n)? "
-                read -r answer
-                if [[ ${answer} == "" ]]; then
-                    answer="y"
-                fi
-                if [ "$answer" != "${answer#[Yy]}" ] ;then
-                    opm get "${dep}" > /dev/null && echo "${dep} successfully installed"
-                else
-                    echo "unable to continue without ${dep}. Exiting" && exit 1
-                fi
-            fi
-        fi
-    done
-}
-
-
 install() {
     mkdir -p "${DATA_PATH}/templates/"
     cp -r lua/lib/* "${LIB_PATH}/"
@@ -162,20 +100,18 @@ install() {
 }
 
 
-if ! [ "$(id -u)" = 0 ] && [ -z ${DOCKER} ]; then
+if ! [ "$(id -u)" = 0 ] && [ -z "${DOCKER}" ]; then
     echo "Please run the install script as root or with sudo"
     exit 1
 fi
 
-[ -z ${DOCKER} ] && check_pkg_manager
+[ -z "${DOCKER}" ] && set_default_ssl_certs_path
 requirement
-[ -z ${DOCKER} ] && check_openresty_dependency
-[ -z ${DOCKER} ] && check_lua_dependency
 gen_config_file
 install
 echo "crowdsec-openresty-bouncer installed successfully"
 echo ""
-[ -z ${DOCKER} ] && echo "Add 'include /usr/local/openresty/nginx/conf/conf.d/crowdsec_openresty.conf;' in your nginx configuration file to enable the bouncer."
+[ -z "${DOCKER}" ] && echo "Add 'include /usr/local/openresty/nginx/conf/conf.d/crowdsec_openresty.conf;' in your nginx configuration file to enable the bouncer."
 echo ""
-[ -z ${DOCKER} ] && echo "Run 'sudo systemctl restart openresty.service' to start openresty-bouncer"
+[ -z "${DOCKER}" ] && echo "Run 'sudo systemctl restart openresty.service' to start openresty-bouncer"
 exit 0

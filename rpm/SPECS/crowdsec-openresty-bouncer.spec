@@ -8,11 +8,12 @@ URL:            https://crowdsec.net
 Source0:        https://github.com/crowdsecurity/%{name}/archive/v%(echo $VERSION).tar.gz
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
+BuildRequires:  ca-certificates
 BuildRequires:  git
 BuildRequires:  make
 %{?fc33:BuildRequires: systemd-rpm-macros}
 
-Requires: openresty, openresty-opm, gettext
+Requires: openresty, gettext
 
 %define debug_package %{nil}
 
@@ -23,6 +24,10 @@ Requires: openresty, openresty-opm, gettext
 %global local_version v%{version_number}-%{releasever}-rpm
 %global name crowdsec-openresty-bouncer
 %global __mangle_shebangs_exclude_from /usr/bin/env
+%global lua_lib_version v1.0.16
+%global lua_lib_commit 35455a64e11368b3df73a381b09c056a3ee77e24
+%global lua_resty_http_version 0.18.0
+%global lua_resty_http_commit 03995ff9a08194d48d446ed2fa099cd6de38fbef
 
 %prep
 %setup -q -T -b 0 -n crowdsec-openresty-bouncer-%{version_number}
@@ -31,13 +36,18 @@ Requires: openresty, openresty-opm, gettext
 rm -rf %{buildroot}
 mkdir -p %{buildroot}/usr/local/openresty/nginx/conf/conf.d/
 mkdir -p %{buildroot}/usr/local/openresty/lualib/plugins/crowdsec/
+mkdir -p %{buildroot}/usr/local/openresty/lualib/resty/
 mkdir -p %{buildroot}/var/lib/crowdsec/lua/templates/
 mkdir -p %{buildroot}/etc/crowdsec/bouncers/
-git clone -b v1.0.16 https://github.com/crowdsecurity/lua-cs-bouncer.git
+git clone --branch %{lua_lib_version} --depth 1 https://github.com/crowdsecurity/lua-cs-bouncer.git
+test "$(git -C lua-cs-bouncer rev-parse HEAD)" = "%{lua_lib_commit}"
+git clone --branch v%{lua_resty_http_version} --depth 1 https://github.com/ledgetech/lua-resty-http.git
+test "$(git -C lua-resty-http rev-parse HEAD)" = "%{lua_resty_http_commit}"
 install -m 600 -D lua-cs-bouncer/config_example.conf %{buildroot}/etc/crowdsec/bouncers/%{name}.conf
 install -m 644 -D lua-cs-bouncer/lib/crowdsec.lua %{buildroot}/usr/local/openresty/lualib/
 install -m 644 -D lua-cs-bouncer/lib/plugins/crowdsec/* %{buildroot}/usr/local/openresty/lualib/plugins/crowdsec/
 install -m 644 -D lua-cs-bouncer/templates/* %{buildroot}/var/lib/crowdsec/lua/templates/
+cp -a lua-resty-http/lib/resty/. %{buildroot}/usr/local/openresty/lualib/resty/
 install -m 644 -D openresty/crowdsec_openresty.conf %{buildroot}/usr/local/openresty/nginx/conf/conf.d/
 sed -i 's#${BOUNCER_VERSION}#%{local_version}#g' %{buildroot}/usr/local/openresty/nginx/conf/conf.d/crowdsec_openresty.conf
 grep -qF 'crowdsec-openresty-bouncer/%{local_version}")' %{buildroot}/usr/local/openresty/nginx/conf/conf.d/crowdsec_openresty.conf
@@ -72,22 +82,6 @@ CERTS=(
     "/etc/ssl/certs/ca-certificates.crt"
 )
 
-
-
-check_lua_dependency() {
-    DEPENDENCY=(
-        "ledgetech/lua-resty-http=0.17.1"
-    )
-    for dep in ${DEPENDENCY[@]};
-    do
-        opm list | grep ${dep} > /dev/null
-        if [[ $? != 0 ]]; then
-            opm get ${dep} > /dev/null && echo "${dep} successfully installed"     
-        fi
-    done
-}
-
-
 if [ "$1" == "1" ] ; then
     type cscli > /dev/null
     if [ "$?" -eq "0" ] ; then
@@ -111,8 +105,6 @@ if [ "$1" == "1" ] ; then
         cp ${BOUNCER_CONFIG_PATH} ${TMP}
         API_KEY=${API_KEY} CROWDSEC_LAPI_URL=${CROWDSEC_LAPI_URL} envsubst < ${TMP} > ${BOUNCER_CONFIG_PATH}
         rm ${TMP}
-        check_lua_dependency
-
     fi
 
     TMP=`mktemp -p /tmp/`
