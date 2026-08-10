@@ -2,7 +2,10 @@
 
 export DEB_VERSION=$(shell dpkg-parsechangelog | egrep '^Version:' | cut -f 2 -d ' ')
 export BUILD_VERSION=v${DEB_VERSION}-debian-pragmatic
-export LUA_BOUNCER_BRANCH?=v1.0.16
+export LUA_LIB_VERSION?=v1.0.16
+export LUA_LIB_COMMIT?=35455a64e11368b3df73a381b09c056a3ee77e24
+export LUA_RESTY_HTTP_VERSION?=0.18.0
+export LUA_RESTY_HTTP_COMMIT?=03995ff9a08194d48d446ed2fa099cd6de38fbef
 
 %:
 	dh $@
@@ -11,6 +14,7 @@ override_dh_systemd_start:
 	echo "Not running dh_systemd_start"
 override_dh_auto_clean:
 	rm -rf lua-cs-bouncer
+	rm -rf lua-resty-http
 override_dh_auto_test:
 override_dh_auto_build:
 override_dh_auto_install:
@@ -19,11 +23,15 @@ override_dh_auto_install:
 	sed -i "s#\$${BOUNCER_VERSION}#$${BUILD_VERSION}#g" debian/crowdsec-openresty-bouncer/usr/local/openresty/nginx/conf/conf.d/crowdsec_openresty.conf
 	grep -qF "crowdsec-openresty-bouncer/$${BUILD_VERSION}\")" debian/crowdsec-openresty-bouncer/usr/local/openresty/nginx/conf/conf.d/crowdsec_openresty.conf
 
-	git clone -b "${LUA_BOUNCER_BRANCH}" https://github.com/crowdsecurity/lua-cs-bouncer.git
+	git clone --branch "${LUA_LIB_VERSION}" --depth 1 https://github.com/crowdsecurity/lua-cs-bouncer.git
+	test "$$(git -C lua-cs-bouncer rev-parse HEAD)" = "${LUA_LIB_COMMIT}"
+	git clone --branch "v${LUA_RESTY_HTTP_VERSION}" --depth 1 https://github.com/ledgetech/lua-resty-http.git
+	test "$$(git -C lua-resty-http rev-parse HEAD)" = "${LUA_RESTY_HTTP_COMMIT}"
 
 	mkdir -p debian/crowdsec-openresty-bouncer/usr/local/openresty/lualib/
 	mkdir -p debian/crowdsec-openresty-bouncer/var/lib/crowdsec/lua/templates/
 	cp -r lua-cs-bouncer/lib/* debian/crowdsec-openresty-bouncer/usr/local/openresty/lualib/
+	cp -r lua-resty-http/lib/resty debian/crowdsec-openresty-bouncer/usr/local/openresty/lualib/
 	cp -r lua-cs-bouncer/templates/* debian/crowdsec-openresty-bouncer/var/lib/crowdsec/lua/templates/
 	mkdir -p debian/crowdsec-openresty-bouncer/etc/crowdsec/bouncers/
 	cp lua-cs-bouncer/config_example.conf debian/crowdsec-openresty-bouncer/etc/crowdsec/bouncers/crowdsec-openresty-bouncer.conf
