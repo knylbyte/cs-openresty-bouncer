@@ -14,8 +14,9 @@ ARG BOUNCER_VERSION=dev
 FROM docker.io/library/alpine:${ALPINE_VERSION}@${ALPINE_DIGEST} AS http
 ARG LUA_RESTY_HTTP_VERSION
 ARG LUA_RESTY_HTTP_COMMIT
+# hadolint ignore=DL3018
 RUN set -eux; \
-    apk add --no-cache ca-certificates=20260611-r0 git=2.52.0-r0; \
+    apk add --no-cache ca-certificates git; \
     git init /sources/lua-resty-http; \
     git -C /sources/lua-resty-http remote add origin https://github.com/ledgetech/lua-resty-http.git; \
     git -C /sources/lua-resty-http fetch --depth=1 origin \

@@ -1,0 +1,308 @@
+name: Update Docker dependencies
+
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-docker-dependencies
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Check for updates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASE_BRANCH: ${{ github.event.repository.default_branch }}
+      GH_TOKEN: ${{ secrets.DEPENDENCY_UPDATE_TOKEN || github.token }}
+      UPDATE_BRANCH: automation/update-docker-dependencies
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.DEPENDENCY_UPDATE_TOKEN || github.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Resolve latest stable versions
+        id: update
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker_hub_tags() {
+            local repository="$1"
+            local response
+            local url="https://hub.docker.com/v2/repositories/${repository}/tags?page_size=100"
+
+            while [[ -n "$url" ]]; do
+              response=$(curl --fail --silent --show-error \
+                --retry 3 --retry-all-errors "$url")
+              jq -r '.results[].name' <<< "$response"
+              url=$(jq -r '.next // empty' <<< "$response")
+            done
+          }
+
+          latest_stable_tag() {
+            local repo="$1"
+            local tag
+
+            tag=$(gh api --paginate "repos/${repo}/tags?per_page=100" --jq '.[].name' |
+              awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print }' |
+              sort -V |
+              tail -n 1)
+            if [[ -z "$tag" ]]; then
+              echo "No stable semantic-version tag found for ${repo}" >&2
+              return 1
+            fi
+            printf '%s\n' "$tag"
+          }
+
+          resolve_commit() {
+            local repo="$1"
+            local tag="$2"
+            local commit
+
+            commit=$(gh api "repos/${repo}/commits/${tag}" --jq '.sha')
+            if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Could not resolve ${repo} ${tag} to a commit" >&2
+              return 1
+            fi
+            printf '%s\n' "$commit"
+          }
+
+          resolve_image_digest() {
+            local image="$1"
+            local tag="$2"
+            local digest
+
+            digest=$(docker buildx imagetools inspect "${image}:${tag}" |
+              sed -n 's/^Digest:[[:space:]]*//p' |
+              head -n 1)
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Could not resolve ${image}:${tag} to a manifest digest" >&2
+              return 1
+            fi
+            printf '%s\n' "$digest"
+          }
+
+          read_arg() {
+            local key="$1"
+            local count
+
+            count=$(grep -c "^ARG ${key}=" Dockerfile)
+            if [[ "$count" -ne 1 ]]; then
+              echo "Expected exactly one ARG ${key} in Dockerfile, found ${count}" >&2
+              return 1
+            fi
+            sed -n "s/^ARG ${key}=//p" Dockerfile
+          }
+
+          replace_arg() {
+            local key="$1"
+            local value="$2"
+
+            sed -i "s|^ARG ${key}=.*$|ARG ${key}=${value}|" Dockerfile
+            grep -qxF "ARG ${key}=${value}" Dockerfile
+          }
+
+          is_newer() {
+            local candidate="$1"
+            local current="$2"
+            [[ "$candidate" != "$current" ]] &&
+              [[ "$(printf '%s\n%s\n' "$candidate" "$current" | sort -V | tail -n 1)" == "$candidate" ]]
+          }
+
+          current_alpine_version=$(read_arg ALPINE_VERSION)
+          current_alpine_digest=$(read_arg ALPINE_DIGEST)
+          current_resty_version=$(read_arg RESTY_VERSION)
+          current_resty_digest=$(read_arg RESTY_RUNTIME_DIGEST)
+          current_http_version=$(read_arg LUA_RESTY_HTTP_VERSION)
+          current_http_commit=$(read_arg LUA_RESTY_HTTP_COMMIT)
+          current_lua_version=$(read_arg LUA_LIB_VERSION)
+          current_lua_commit=$(read_arg LUA_LIB_COMMIT)
+
+          current_http_tag="v${current_http_version}"
+          current_lua_tag="${current_lua_version}"
+          if [[ ! "$current_alpine_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+             [[ ! "$current_resty_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]] ||
+             [[ ! "$current_http_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+             [[ ! "$current_lua_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Dockerfile contains an unsupported dependency version" >&2
+            exit 1
+          fi
+          if [[ ! "$current_alpine_digest" =~ ^sha256:[0-9a-f]{64}$ ]] ||
+             [[ ! "$current_resty_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Dockerfile contains an invalid image digest" >&2
+            exit 1
+          fi
+
+          latest_alpine_version=$(docker_hub_tags library/alpine |
+            awk '/^[0-9]+\.[0-9]+\.[0-9]+$/ { print }' |
+            sort -V |
+            tail -n 1)
+          latest_resty_tag=$(docker_hub_tags openresty/openresty |
+            awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-alpine-slim$/ { print }' |
+            sort -V |
+            tail -n 1)
+          if [[ -z "$latest_alpine_version" || -z "$latest_resty_tag" ]]; then
+            echo "Could not find stable Alpine or OpenResty image tags" >&2
+            exit 1
+          fi
+          latest_resty_version=${latest_resty_tag%-alpine-slim}
+
+          latest_alpine_digest=$(resolve_image_digest \
+            docker.io/library/alpine "$latest_alpine_version")
+          latest_resty_digest=$(resolve_image_digest \
+            docker.io/openresty/openresty "$latest_resty_tag")
+
+          latest_http_tag=$(latest_stable_tag ledgetech/lua-resty-http)
+          latest_lua_tag=$(latest_stable_tag crowdsecurity/lua-cs-bouncer)
+          latest_http_commit=$(resolve_commit ledgetech/lua-resty-http "$latest_http_tag")
+          latest_lua_commit=$(resolve_commit crowdsecurity/lua-cs-bouncer "$latest_lua_tag")
+
+          if [[ "$latest_alpine_version" != "$current_alpine_version" ]] &&
+             ! is_newer "$latest_alpine_version" "$current_alpine_version"; then
+            echo "Refusing to downgrade Alpine from ${current_alpine_version} to ${latest_alpine_version}" >&2
+            exit 1
+          fi
+          if [[ "$latest_resty_version" != "$current_resty_version" ]] &&
+             ! is_newer "$latest_resty_version" "$current_resty_version"; then
+            echo "Refusing to downgrade OpenResty from ${current_resty_version} to ${latest_resty_version}" >&2
+            exit 1
+          fi
+          if [[ "$latest_http_tag" != "$current_http_tag" ]] &&
+             ! is_newer "$latest_http_tag" "$current_http_tag"; then
+            echo "Refusing to downgrade lua-resty-http from ${current_http_tag} to ${latest_http_tag}" >&2
+            exit 1
+          fi
+          if [[ "$latest_lua_tag" != "$current_lua_tag" ]] &&
+             ! is_newer "$latest_lua_tag" "$current_lua_tag"; then
+            echo "Refusing to downgrade lua-cs-bouncer from ${current_lua_tag} to ${latest_lua_tag}" >&2
+            exit 1
+          fi
+
+          if [[ "$latest_http_tag" == "$current_http_tag" &&
+                "$latest_http_commit" != "$current_http_commit" ]]; then
+            echo "Tag ${current_http_tag} moved in ledgetech/lua-resty-http; refusing an automatic update" >&2
+            exit 1
+          fi
+          if [[ "$latest_lua_tag" == "$current_lua_tag" &&
+                "$latest_lua_commit" != "$current_lua_commit" ]]; then
+            echo "Tag ${current_lua_tag} moved in crowdsecurity/lua-cs-bouncer; refusing an automatic update" >&2
+            exit 1
+          fi
+
+          replace_arg ALPINE_VERSION "$latest_alpine_version"
+          replace_arg ALPINE_DIGEST "$latest_alpine_digest"
+          replace_arg RESTY_VERSION "$latest_resty_version"
+          replace_arg RESTY_RUNTIME_DIGEST "$latest_resty_digest"
+          replace_arg LUA_RESTY_HTTP_VERSION "${latest_http_tag#v}"
+          replace_arg LUA_RESTY_HTTP_COMMIT "$latest_http_commit"
+          replace_arg LUA_LIB_VERSION "$latest_lua_tag"
+          replace_arg LUA_LIB_COMMIT "$latest_lua_commit"
+
+          {
+            echo "### Docker dependency check"
+            echo
+            echo "| Dependency | Current | Latest |"
+            echo "| --- | --- | --- |"
+            echo "| Alpine | ${current_alpine_version} | ${latest_alpine_version} |"
+            echo "| OpenResty | ${current_resty_version} | ${latest_resty_version} |"
+            echo "| lua-resty-http | ${current_http_tag} | ${latest_http_tag} |"
+            echo "| lua-cs-bouncer | ${current_lua_tag} | ${latest_lua_tag} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if git diff --quiet -- Dockerfile; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "changed=true"
+            echo "alpine_from=${current_alpine_version}"
+            echo "alpine_to=${latest_alpine_version}"
+            echo "resty_from=${current_resty_version}"
+            echo "resty_to=${latest_resty_version}"
+            echo "http_from=${current_http_tag}"
+            echo "http_to=${latest_http_tag}"
+            echo "lua_from=${current_lua_tag}"
+            echo "lua_to=${latest_lua_tag}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create or update pull request
+        if: steps.update.outputs.changed == 'true'
+        shell: bash
+        env:
+          ALPINE_FROM: ${{ steps.update.outputs.alpine_from }}
+          ALPINE_TO: ${{ steps.update.outputs.alpine_to }}
+          RESTY_FROM: ${{ steps.update.outputs.resty_from }}
+          RESTY_TO: ${{ steps.update.outputs.resty_to }}
+          HTTP_FROM: ${{ steps.update.outputs.http_from }}
+          HTTP_TO: ${{ steps.update.outputs.http_to }}
+          LUA_FROM: ${{ steps.update.outputs.lua_from }}
+          LUA_TO: ${{ steps.update.outputs.lua_to }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          printf -v pr_body \
+            'Updates the dependencies pinned in Dockerfile.\n\n- Alpine: %s -> %s\n- OpenResty: %s -> %s\n- lua-resty-http: %s -> %s\n- lua-cs-bouncer: %s -> %s\n\nImage manifest digests and Git commit pins are updated with their versions. The Docker image smoke test runs through the pull request workflow.' \
+            "$ALPINE_FROM" "$ALPINE_TO" \
+            "$RESTY_FROM" "$RESTY_TO" \
+            "$HTTP_FROM" "$HTTP_TO" \
+            "$LUA_FROM" "$LUA_TO"
+
+          existing_pr_number=$(gh pr list \
+            --state open \
+            --head "$UPDATE_BRANCH" \
+            --json number \
+            --jq '.[0].number // empty')
+          existing_pr_url=$(gh pr list \
+            --state open \
+            --head "$UPDATE_BRANCH" \
+            --json url \
+            --jq '.[0].url // empty')
+
+          branch_exists=false
+          if git ls-remote --exit-code --heads origin "$UPDATE_BRANCH" >/dev/null 2>&1; then
+            git fetch --no-tags origin \
+              "+refs/heads/${UPDATE_BRANCH}:refs/remotes/origin/${UPDATE_BRANCH}"
+            branch_exists=true
+          fi
+
+          if [[ "$branch_exists" == "true" && -n "$existing_pr_number" ]] &&
+             git diff --quiet "refs/remotes/origin/${UPDATE_BRANCH}" -- Dockerfile; then
+            echo "${existing_pr_url} already contains the latest dependency versions"
+            exit 0
+          fi
+
+          git switch --force-create "$UPDATE_BRANCH"
+          git add -- Dockerfile
+          git commit -m "chore: update docker dependencies"
+          git push --force-with-lease="refs/heads/${UPDATE_BRANCH}" \
+            origin "HEAD:refs/heads/${UPDATE_BRANCH}"
+
+          if [[ -n "$existing_pr_number" ]]; then
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/pulls/${existing_pr_number}" \
+              --field body="$pr_body" >/dev/null
+            echo "Updated ${existing_pr_url}"
+            exit 0
+          fi
+
+          gh pr create \
+            --base "$BASE_BRANCH" \
+            --head "$UPDATE_BRANCH" \
+            --title "chore: update docker dependencies" \
+            --body "$pr_body"
