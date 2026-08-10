@@ -16,6 +16,9 @@ release:
 	cp lua-cs-bouncer/templates/* "${TEMPLATE_DIR}"
 	cp -r lua-cs-bouncer/config_example.conf ${CONFIG_DIR}
 	cp -r ./openresty/ ${OUTDIR}
+	release_version=${BUILD_VERSION}; \
+	sed -i "s#\$${BOUNCER_VERSION}#$${release_version}#g" "${OUTDIR}openresty/crowdsec_openresty.conf"; \
+	grep -qF "crowdsec-openresty-bouncer/$${release_version}\")" "${OUTDIR}openresty/crowdsec_openresty.conf"
 	cp install.sh ${OUTDIR}
 	cp uninstall.sh ${OUTDIR}
 	chmod +x ${OUTDIR}install.sh

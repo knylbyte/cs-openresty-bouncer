@@ -8,6 +8,7 @@ DATA_PATH="/var/lib/crowdsec/lua/"
 PKG="apt"
 PACKAGE_LIST="dpkg -l"
 SSL_CERTS_PATH="/etc/ssl/certs/ca-certificates.crt"
+BOUNCER_VERSION="${BOUNCER_VERSION:-dev}"
 LAPI_DEFAULT_PORT="8080"
 SILENT="false"
 
@@ -155,7 +156,8 @@ install() {
     cp -r lua/lib/* "${LIB_PATH}/"
     cp templates/* "${DATA_PATH}/templates/"
     #Patch the nginx config file
-    SSL_CERTS_PATH=${SSL_CERTS_PATH} envsubst '$SSL_CERTS_PATH' < openresty/${NGINX_CONF} > "${NGINX_CONF_DIR}/${NGINX_CONF}"
+    SSL_CERTS_PATH="${SSL_CERTS_PATH}" BOUNCER_VERSION="${BOUNCER_VERSION}" \
+        envsubst '$SSL_CERTS_PATH $BOUNCER_VERSION' < openresty/${NGINX_CONF} > "${NGINX_CONF_DIR}/${NGINX_CONF}"
     sed -i 's|/etc/crowdsec/bouncers|'"${CONFIG_PATH}"'|' "${NGINX_CONF_DIR}/${NGINX_CONF}"
 }
 

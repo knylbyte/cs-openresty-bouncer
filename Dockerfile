@@ -78,7 +78,7 @@ RUN set -eux; \
       -e '1iresolver local=on ipv6=off;' \
       -e 's#${SSL_CERTS_PATH}#/etc/ssl/certs/ca-certificates.crt#g' \
       -e 's#/etc/crowdsec/bouncers/crowdsec-openresty-bouncer.conf#/var/run/crowdsec/crowdsec-openresty-bouncer.conf#g' \
-      -e "s#crowdsec-openresty-bouncer/v[0-9][0-9A-Za-z.-]*#crowdsec-openresty-bouncer/${BOUNCER_VERSION}#g" \
+      -e "s#\${BOUNCER_VERSION}#${BOUNCER_VERSION}#g" \
       /etc/nginx/bouncer.d/crowdsec_openresty.conf; \
     grep -qF "crowdsec-openresty-bouncer/${BOUNCER_VERSION}\")" \
       /etc/nginx/bouncer.d/crowdsec_openresty.conf; \
