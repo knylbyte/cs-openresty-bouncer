@@ -1,4 +1,4 @@
-name: Update Docker dependencies
+name: Update dependencies
 
 on:
   schedule:
@@ -10,7 +10,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: update-docker-dependencies
+  group: update-dependencies
   cancel-in-progress: false
 
 jobs:
@@ -21,7 +21,7 @@ jobs:
     env:
       BASE_BRANCH: ${{ github.event.repository.default_branch }}
       GH_TOKEN: ${{ secrets.DEPENDENCY_UPDATE_TOKEN || github.token }}
-      UPDATE_BRANCH: automation/update-docker-dependencies
+      UPDATE_BRANCH: automation/update-dependencies
     steps:
       - name: Check out the repo
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -66,6 +66,34 @@ jobs:
             printf '%s\n' "$tag"
           }
 
+          latest_opm_version() {
+            local package="$1"
+            local response
+            local version
+
+            response=$(curl --fail --silent --show-error \
+              --retry 3 --retry-all-errors \
+              "https://opm.openresty.org/package/${package}")
+            version=$(awk '
+              BEGIN { RS = "</li>" }
+              /class="package_row"/ && !/class="failed"/ && /class="version_name"/ {
+                row = $0
+                gsub(/[\r\n]/, " ", row)
+                sub(/^.*<span class="version_name">[[:space:]]*/, "", row)
+                sub(/[[:space:]]*<\/span>.*/, "", row)
+                print row
+              }
+            ' <<< "$response" |
+              awk '/^[0-9]+\.[0-9]+\.[0-9]+$/ { print }' |
+              sort -V |
+              tail -n 1)
+            if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "No installable semantic version found in OPM for ${package}" >&2
+              return 1
+            fi
+            printf '%s\n' "$version"
+          }
+
           resolve_commit() {
             local repo="$1"
             local tag="$2"
@@ -98,12 +126,26 @@ jobs:
             local key="$1"
             local count
 
-            count=$(grep -c "^ARG ${key}=" Dockerfile)
+            count=$(grep -c "^ARG ${key}=" Dockerfile || true)
             if [[ "$count" -ne 1 ]]; then
               echo "Expected exactly one ARG ${key} in Dockerfile, found ${count}" >&2
               return 1
             fi
             sed -n "s/^ARG ${key}=//p" Dockerfile
+          }
+
+          read_opm_version() {
+            local file="$1"
+            local count
+            local dependency
+
+            count=$(grep -cE 'ledgetech/lua-resty-http=[0-9]+\.[0-9]+\.[0-9]+' "$file" || true)
+            if [[ "$count" -ne 1 ]]; then
+              echo "Expected exactly one lua-resty-http OPM version in ${file}, found ${count}" >&2
+              return 1
+            fi
+            dependency=$(grep -Eo 'ledgetech/lua-resty-http=[0-9]+\.[0-9]+\.[0-9]+' "$file")
+            printf '%s\n' "${dependency#*=}"
           }
 
           replace_arg() {
@@ -112,6 +154,38 @@ jobs:
 
             sed -i "s|^ARG ${key}=.*$|ARG ${key}=${value}|" Dockerfile
             grep -qxF "ARG ${key}=${value}" Dockerfile
+          }
+
+          replace_fixed() {
+            local file="$1"
+            local old="$2"
+            local new="$3"
+            local count
+            local temp_file="${file}.tmp"
+
+            count=$(grep -cF "$old" "$file" || true)
+            if [[ "$count" -ne 1 ]]; then
+              echo "Expected exactly one '${old}' in ${file}, found ${count}" >&2
+              return 1
+            fi
+            OLD_VALUE="$old" NEW_VALUE="$new" awk '
+              {
+                start = index($0, ENVIRON["OLD_VALUE"])
+                if (start > 0) {
+                  print substr($0, 1, start - 1) ENVIRON["NEW_VALUE"] \
+                    substr($0, start + length(ENVIRON["OLD_VALUE"]))
+                  next
+                }
+                print
+              }
+            ' "$file" > "$temp_file"
+            chmod --reference="$file" "$temp_file"
+            mv "$temp_file" "$file"
+            count=$(grep -cF "$new" "$file" || true)
+            if [[ "$count" -ne 1 ]]; then
+              echo "Failed to write '${new}' to ${file}" >&2
+              return 1
+            fi
           }
 
           is_newer() {
@@ -129,6 +203,15 @@ jobs:
           current_http_commit=$(read_arg LUA_RESTY_HTTP_COMMIT)
           current_lua_version=$(read_arg LUA_LIB_VERSION)
           current_lua_commit=$(read_arg LUA_LIB_COMMIT)
+          current_opm_http_version=$(read_opm_version install.sh)
+          debian_opm_http_version=$(read_opm_version debian/postinst)
+          rpm_opm_http_version=$(read_opm_version rpm/SPECS/crowdsec-openresty-bouncer.spec)
+
+          if [[ "$debian_opm_http_version" != "$current_opm_http_version" ||
+                "$rpm_opm_http_version" != "$current_opm_http_version" ]]; then
+            echo "lua-resty-http OPM versions are inconsistent across package installers" >&2
+            exit 1
+          fi
 
           current_http_tag="v${current_http_version}"
           current_lua_tag="${current_lua_version}"
@@ -168,6 +251,7 @@ jobs:
           latest_lua_tag=$(latest_stable_tag crowdsecurity/lua-cs-bouncer)
           latest_http_commit=$(resolve_commit ledgetech/lua-resty-http "$latest_http_tag")
           latest_lua_commit=$(resolve_commit crowdsecurity/lua-cs-bouncer "$latest_lua_tag")
+          latest_opm_http_version=$(latest_opm_version ledgetech/lua-resty-http)
 
           if [[ "$latest_alpine_version" != "$current_alpine_version" ]] &&
              ! is_newer "$latest_alpine_version" "$current_alpine_version"; then
@@ -187,6 +271,11 @@ jobs:
           if [[ "$latest_lua_tag" != "$current_lua_tag" ]] &&
              ! is_newer "$latest_lua_tag" "$current_lua_tag"; then
             echo "Refusing to downgrade lua-cs-bouncer from ${current_lua_tag} to ${latest_lua_tag}" >&2
+            exit 1
+          fi
+          if [[ "$latest_opm_http_version" != "$current_opm_http_version" ]] &&
+             ! is_newer "$latest_opm_http_version" "$current_opm_http_version"; then
+            echo "Refusing to downgrade lua-resty-http in OPM from ${current_opm_http_version} to ${latest_opm_http_version}" >&2
             exit 1
           fi
 
@@ -209,19 +298,46 @@ jobs:
           replace_arg LUA_RESTY_HTTP_COMMIT "$latest_http_commit"
           replace_arg LUA_LIB_VERSION "$latest_lua_tag"
           replace_arg LUA_LIB_COMMIT "$latest_lua_commit"
+          replace_fixed Makefile \
+            "LUA_BOUNCER_BRANCH?=${current_lua_tag}" \
+            "LUA_BOUNCER_BRANCH?=${latest_lua_tag}"
+          replace_fixed debian/rules \
+            "export LUA_BOUNCER_BRANCH?=${current_lua_tag}" \
+            "export LUA_BOUNCER_BRANCH?=${latest_lua_tag}"
+          replace_fixed rpm/SPECS/crowdsec-openresty-bouncer.spec \
+            "git clone -b ${current_lua_tag} https://github.com/crowdsecurity/lua-cs-bouncer.git" \
+            "git clone -b ${latest_lua_tag} https://github.com/crowdsecurity/lua-cs-bouncer.git"
+          replace_fixed install.sh \
+            "ledgetech/lua-resty-http=${current_opm_http_version}" \
+            "ledgetech/lua-resty-http=${latest_opm_http_version}"
+          replace_fixed debian/postinst \
+            "ledgetech/lua-resty-http=${current_opm_http_version}" \
+            "ledgetech/lua-resty-http=${latest_opm_http_version}"
+          replace_fixed rpm/SPECS/crowdsec-openresty-bouncer.spec \
+            "ledgetech/lua-resty-http=${current_opm_http_version}" \
+            "ledgetech/lua-resty-http=${latest_opm_http_version}"
 
           {
-            echo "### Docker dependency check"
+            echo "### Dependency check"
             echo
             echo "| Dependency | Current | Latest |"
             echo "| --- | --- | --- |"
             echo "| Alpine | ${current_alpine_version} | ${latest_alpine_version} |"
             echo "| OpenResty | ${current_resty_version} | ${latest_resty_version} |"
-            echo "| lua-resty-http | ${current_http_tag} | ${latest_http_tag} |"
+            echo "| lua-resty-http (GitHub) | ${current_http_tag} | ${latest_http_tag} |"
+            echo "| lua-resty-http (OPM) | ${current_opm_http_version} | ${latest_opm_http_version} |"
             echo "| lua-cs-bouncer | ${current_lua_tag} | ${latest_lua_tag} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if git diff --quiet -- Dockerfile; then
+          update_files=(
+            Dockerfile
+            Makefile
+            install.sh
+            debian/postinst
+            debian/rules
+            rpm/SPECS/crowdsec-openresty-bouncer.spec
+          )
+          if git diff --quiet -- "${update_files[@]}"; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -234,6 +350,8 @@ jobs:
             echo "resty_to=${latest_resty_version}"
             echo "http_from=${current_http_tag}"
             echo "http_to=${latest_http_tag}"
+            echo "opm_http_from=${current_opm_http_version}"
+            echo "opm_http_to=${latest_opm_http_version}"
             echo "lua_from=${current_lua_tag}"
             echo "lua_to=${latest_lua_tag}"
           } >> "$GITHUB_OUTPUT"
@@ -248,6 +366,8 @@ jobs:
           RESTY_TO: ${{ steps.update.outputs.resty_to }}
           HTTP_FROM: ${{ steps.update.outputs.http_from }}
           HTTP_TO: ${{ steps.update.outputs.http_to }}
+          OPM_HTTP_FROM: ${{ steps.update.outputs.opm_http_from }}
+          OPM_HTTP_TO: ${{ steps.update.outputs.opm_http_to }}
           LUA_FROM: ${{ steps.update.outputs.lua_from }}
           LUA_TO: ${{ steps.update.outputs.lua_to }}
         run: |
@@ -257,11 +377,21 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           printf -v pr_body \
-            'Updates the dependencies pinned in Dockerfile.\n\n- Alpine: %s -> %s\n- OpenResty: %s -> %s\n- lua-resty-http: %s -> %s\n- lua-cs-bouncer: %s -> %s\n\nImage manifest digests and Git commit pins are updated with their versions. The Docker image smoke test runs through the pull request workflow.' \
+            'Updates dependencies across the Docker image and package installers.\n\n- Alpine: %s -> %s\n- OpenResty: %s -> %s\n- lua-resty-http (GitHub): %s -> %s\n- lua-resty-http (OPM): %s -> %s\n- lua-cs-bouncer: %s -> %s\n\nImage manifest digests and Git commit pins are updated together with their versions.' \
             "$ALPINE_FROM" "$ALPINE_TO" \
             "$RESTY_FROM" "$RESTY_TO" \
             "$HTTP_FROM" "$HTTP_TO" \
+            "$OPM_HTTP_FROM" "$OPM_HTTP_TO" \
             "$LUA_FROM" "$LUA_TO"
+
+          update_files=(
+            Dockerfile
+            Makefile
+            install.sh
+            debian/postinst
+            debian/rules
+            rpm/SPECS/crowdsec-openresty-bouncer.spec
+          )
 
           existing_pr_number=$(gh pr list \
             --state open \
@@ -282,14 +412,14 @@ jobs:
           fi
 
           if [[ "$branch_exists" == "true" && -n "$existing_pr_number" ]] &&
-             git diff --quiet "refs/remotes/origin/${UPDATE_BRANCH}" -- Dockerfile; then
+             git diff --quiet "refs/remotes/origin/${UPDATE_BRANCH}" -- "${update_files[@]}"; then
             echo "${existing_pr_url} already contains the latest dependency versions"
             exit 0
           fi
 
           git switch --force-create "$UPDATE_BRANCH"
-          git add -- Dockerfile
-          git commit -m "chore: update docker dependencies"
+          git add -- "${update_files[@]}"
+          git commit -m "chore: update dependencies"
           git push --force-with-lease="refs/heads/${UPDATE_BRANCH}" \
             origin "HEAD:refs/heads/${UPDATE_BRANCH}"
 
@@ -304,5 +434,5 @@ jobs:
           gh pr create \
             --base "$BASE_BRANCH" \
             --head "$UPDATE_BRANCH" \
-            --title "chore: update docker dependencies" \
+            --title "chore: update dependencies" \
             --body "$pr_body"

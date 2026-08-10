@@ -39,6 +39,8 @@ install -m 644 -D lua-cs-bouncer/lib/crowdsec.lua %{buildroot}/usr/local/openres
 install -m 644 -D lua-cs-bouncer/lib/plugins/crowdsec/* %{buildroot}/usr/local/openresty/lualib/plugins/crowdsec/
 install -m 644 -D lua-cs-bouncer/templates/* %{buildroot}/var/lib/crowdsec/lua/templates/
 install -m 644 -D openresty/crowdsec_openresty.conf %{buildroot}/usr/local/openresty/nginx/conf/conf.d/
+sed -i 's#${BOUNCER_VERSION}#%{local_version}#g' %{buildroot}/usr/local/openresty/nginx/conf/conf.d/crowdsec_openresty.conf
+grep -qF 'crowdsec-openresty-bouncer/%{local_version}")' %{buildroot}/usr/local/openresty/nginx/conf/conf.d/crowdsec_openresty.conf
 
 %clean
 rm -rf %{buildroot}
