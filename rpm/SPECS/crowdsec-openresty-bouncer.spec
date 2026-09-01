@@ -24,8 +24,8 @@ Requires: openresty, gettext
 %global local_version v%{version_number}-%{releasever}-rpm
 %global name crowdsec-openresty-bouncer
 %global __mangle_shebangs_exclude_from /usr/bin/env
-%global lua_lib_version v1.0.16
-%global lua_lib_commit 35455a64e11368b3df73a381b09c056a3ee77e24
+%global lua_lib_version v1.0.18
+%global lua_lib_commit 59f3521e3918377fc1eb97d59a4056b6e9f5782f
 %global lua_resty_http_version 0.18.0
 %global lua_resty_http_commit 03995ff9a08194d48d446ed2fa099cd6de38fbef
 
